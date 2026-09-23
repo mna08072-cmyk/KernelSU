@@ -10,7 +10,13 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/version.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 #include <linux/input-event-codes.h>
+#else
+// No include/linux/input-event-codes.h below 5.10 (only the uapi one);
+// EV_KEY/KEY_VOLUMEDOWN still arrive via linux/input.h.
+#include <linux/input.h>
+#endif
 #include <linux/kprobes.h>
 #include <linux/printk.h>
 #include <linux/types.h>

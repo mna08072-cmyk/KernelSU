@@ -438,8 +438,10 @@ static struct vfsmount *anon_inode_mnt __read_mostly;
 static struct inode *ksu_anon_inode_make_secure_inode(const char *name, const struct inode *context_inode)
 {
     struct inode *inode;
-    const struct qstr qname = QSTR_INIT(name, strlen(name));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
     int error;
+    const struct qstr qname = QSTR_INIT(name, strlen(name));
+#endif
 
     if (unlikely(!anon_inode_mnt)) {
         return ERR_PTR(-ENODEV);
@@ -449,11 +451,18 @@ static struct inode *ksu_anon_inode_make_secure_inode(const char *name, const st
     if (IS_ERR(inode))
         return inode;
     inode->i_flags &= ~S_PRIVATE;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
     error = security_inode_init_security_anon(inode, &qname, context_inode);
     if (error) {
         iput(inode);
         return ERR_PTR(error);
     }
+#else
+    // No security_inode_init_security_anon() below 5.12; the inode stays
+    // unlabeled here and ksu_install_file_wrapper() stamps ksu_file_sid on
+    // it via selinux_inode() afterwards, same as ReSukiSU.
+    (void)context_inode;
+#endif
     return inode;
 }
 
