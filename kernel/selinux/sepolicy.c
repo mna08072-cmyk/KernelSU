@@ -13,6 +13,13 @@
 #include "sepolicy.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ss/symtab.h"
+#include "compat/kernel_compat.h"
+
+#ifndef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+#include <linux/rwlock.h>
+#include "security.h"
+#include "ss/services.h"
+#endif
 
 #define KSU_SUPPORT_ADD_TYPE
 
@@ -498,6 +505,8 @@ static bool add_type_rule(struct policydb *db, const char *s, const char *t, con
 // 5.9.0 : static inline int hashtab_insert(struct hashtab *h, void *key, void
 // *datum, struct hashtab_key_params key_params) 5.8.0: int
 // hashtab_insert(struct hashtab *h, void *k, void *d);
+// Only used by the 5.10+ filename_trans path below.
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 static u32 filenametr_hash(const void *k)
 {
@@ -542,8 +551,12 @@ static bool add_filename_trans(struct policydb *db, const char *s, const char *t
 {
     struct type_datum *src, *tgt, *def;
     struct class_datum *cls;
-    struct filename_trans_key *new_key = NULL;
     int rc;
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+    struct filename_trans_key *new_key = NULL;
+#else
+    struct filename_trans *new_key = NULL;
+#endif
 
     src = symtab_search(&db->p_types, s);
     if (src == NULL) {
@@ -566,6 +579,7 @@ static bool add_filename_trans(struct policydb *db, const char *s, const char *t
         return false;
     }
 
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
     struct filename_trans_key key;
     key.ttype = tgt->value;
     key.tclass = cls->value;
@@ -623,6 +637,59 @@ free_trans:
     kfree(trans);
 out:
     return false;
+#else
+    // Pre-5.10 (e.g. 5.4): filename_trans is a "struct hashtab *" keyed by the
+    // legacy "struct filename_trans" (stype/ttype/tclass/name) with a plain
+    // "struct filename_trans_datum" ({ otype }) payload. Unlike ReSukiSU's
+    // pre-5.7 branch, fill in stype (part of the 5.4 hash/cmp key) and mark
+    // filename_trans_ttypes by ttype, matching 5.4 policydb.c/services.c.
+    struct filename_trans key;
+    key.stype = src->value;
+    key.ttype = tgt->value;
+    key.tclass = cls->value;
+    key.name = (char *)o;
+
+    struct filename_trans_datum *trans = hashtab_search(db->filename_trans, &key);
+
+    if (trans == NULL) {
+        trans = (struct filename_trans_datum *)kcalloc(1, sizeof(*trans), GFP_KERNEL);
+        if (!trans) {
+            pr_err("add_filename_trans: alloc filename_trans_datum failed\n");
+            goto out;
+        }
+        new_key = (struct filename_trans *)kzalloc(sizeof(*new_key), GFP_KERNEL);
+        if (!new_key) {
+            pr_err("add_filename_trans: alloc filename_trans_key failed\n");
+            goto free_trans;
+        }
+        *new_key = key;
+        new_key->name = kstrdup(key.name, GFP_KERNEL);
+        if (!new_key->name) {
+            pr_err("add_filename_trans: kstrdup name failed\n");
+            goto free_key;
+        }
+        trans->otype = def->value;
+        rc = hashtab_insert(db->filename_trans, new_key, trans);
+        if (rc) {
+            pr_err("add_filename_trans: hashtab_insert failed: %d\n", rc);
+            goto free_name;
+        }
+    } else {
+        // Duplicate, overwrite existing data
+        trans->otype = def->value;
+    }
+
+    return ebitmap_set_bit(&db->filename_trans_ttypes, tgt->value, 1) == 0;
+
+free_name:
+    kfree(new_key->name);
+free_key:
+    kfree(new_key);
+free_trans:
+    kfree(trans);
+out:
+    return false;
+#endif
 }
 
 static bool add_genfscon(struct policydb *db, const char *fs_name, const char *path, const char *context)
@@ -680,7 +747,13 @@ static bool add_type(struct policydb *db, const char *type_name, bool attr)
         return false;
     }
 
+// symtab_insert() only exists since 5.9; below that, insert into the
+// symtab's hashtab directly (same operation, matches 5.4 type_read()).
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     if (symtab_insert(&db->p_types, key, type)) {
+#else
+    if (hashtab_insert(db->p_types.table, key, type)) {
+#endif
         pr_err("add_type: insert symtab failed.\n");
         return false;
     }
@@ -894,12 +967,108 @@ bool ksu_genfscon(struct policydb *db, const char *fs_name, const char *path, co
 
 // ======== sepolicy ========
 
+#ifndef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+// Pre-5.10: no struct selinux_policy; duplicate the live policydb instead,
+// mirroring ReSukiSU's ksu_dup_policydb (read-locked serialization, config
+// fixup for the android netlink bits 5.4 keeps in the policydb).
+void ksu_destroy_policydb(struct policydb *db)
+{
+    policydb_destroy(db);
+}
+
+static inline void ksu_lock_sepolicy_read_legacy(void)
+{
+    read_lock(&selinux_state.ss->policy_rwlock);
+}
+
+static inline void ksu_unlock_sepolicy_read_legacy(void)
+{
+    read_unlock(&selinux_state.ss->policy_rwlock);
+}
+
+// result is len or errno
+int ksu_dup_policydb(struct policydb *old_db, struct policydb *new_db)
+{
+    struct policy_file fp = { 0 };
+    void *data;
+    int ret = 0;
+    int len = 0;
+
+    ksu_lock_sepolicy_read_legacy();
+
+    // Some device policy db seems not marking type itself in type_attr_map_array
+    // policydb_read() adds each type to its own attribute map, so old_db->len may be smaller
+    // preserve one ebitmap entry for this condition to avoid trigger -EINVAL
+    len = old_db->len + (size_t)old_db->p_types.nprim * (sizeof(u32) + sizeof(u64));
+
+    ksu_unlock_sepolicy_read_legacy();
+
+    data = vmalloc(len);
+    if (!data) {
+        pr_err("alloc policy buffer len %d\n", len);
+        ret = -ENOMEM;
+        goto out_free_data;
+    }
+
+    fp.data = data;
+    fp.len = len;
+
+    ksu_lock_sepolicy_read_legacy();
+    ret = policydb_write(old_db, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_write: %d\n", ret);
+        ksu_unlock_sepolicy_read_legacy();
+        goto out_free_data;
+    }
+    len -= fp.len;
+    ksu_unlock_sepolicy_read_legacy();
+
+    // https://android-review.googlesource.com/c/kernel/common/+/3009995
+    // Android won't add these flags to policydb_write, fixup config instead.
+    // 4*2+8+4
+    static const size_t kConfigOff = 20;
+    if (len >= kConfigOff + sizeof(u32)) {
+        u32 *config_ptr = (u32 *)((unsigned long)data + kConfigOff);
+        if (old_db->android_netlink_route) {
+            pr_info("adding POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE\n");
+            *config_ptr |= POLICYDB_CONFIG_ANDROID_NETLINK_ROUTE;
+        }
+        if (old_db->android_netlink_getneigh) {
+            pr_info("adding POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH\n");
+            *config_ptr |= POLICYDB_CONFIG_ANDROID_NETLINK_GETNEIGH;
+        }
+    }
+
+    // rewind fp
+    fp.data = data;
+    fp.len = len;
+
+    ret = policydb_read(new_db, &fp);
+    if (ret) {
+        pr_err("sepolicy: policydb_read: %d\n", ret);
+        goto out_free_data;
+    }
+
+    new_db->len = len;
+
+    vfree(data);
+    ret = len;
+
+    return ret;
+
+out_free_data:
+    vfree(data);
+    return ret;
+}
+#else
 void ksu_destroy_sepolicy(struct selinux_policy *pol)
 {
     policydb_destroy(&pol->policydb);
     kfree(pol);
 }
+#endif
 
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
 struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol)
 {
     int ret;
@@ -979,3 +1148,4 @@ out_free_data:
 
     return ERR_PTR(ret);
 }
+#endif
