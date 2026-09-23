@@ -14,6 +14,7 @@
 #include <net/genetlink.h>
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
+#include <linux/rwlock.h>
 // security/selinux/include/security.h
 #include <security.h>
 #include <ss/context.h>
@@ -26,6 +27,7 @@
 #include "objsec.h"
 #include "hook/patch_memory.h"
 #include "ksu.h"
+#include "compat/kernel_compat.h"
 #include "policy/feature.h"
 #include "hook/lsm_hook.h"
 
@@ -249,15 +251,15 @@ static struct page *fake_status = NULL;
 
 static void initialize_fake_status()
 {
-    mutex_lock(&selinux_state.status_lock);
+    mutex_lock(ksu_selinux_status_lock());
     if (fake_status)
         goto out;
-    if (!selinux_state.status_page) {
+    if (!ksu_selinux_status_page()) {
         pr_warn("initialize_fake_status: status_page not exist\n");
         goto out;
     }
 
-    struct selinux_kernel_status *status = page_address(selinux_state.status_page);
+    struct selinux_kernel_status *status = page_address(ksu_selinux_status_page());
     if (!status->enforcing && !ksu_late_loaded) {
         pr_warn("initialize_fake_status: skip not enforcing\n");
         goto out;
@@ -293,7 +295,7 @@ static void initialize_fake_status()
             new_status->policyload, new_status->enforcing);
 
 out:
-    mutex_unlock(&selinux_state.status_lock);
+    mutex_unlock(ksu_selinux_status_lock());
 }
 
 typedef int (*sel_open_handle_status_fn)(struct inode *inode, struct file *filp);
@@ -302,9 +304,9 @@ static int my_sel_open_handle_status(struct inode *inode, struct file *filp)
 {
     if (likely(current_uid().val >= 10000 && ksu_selinux_hide_enabled)) {
         void *data;
-        mutex_lock(&selinux_state.status_lock);
+        mutex_lock(ksu_selinux_status_lock());
         data = fake_status;
-        mutex_unlock(&selinux_state.status_lock);
+        mutex_unlock(ksu_selinux_status_lock());
         if (data) {
             filp->private_data = data;
             return 0;
@@ -324,10 +326,22 @@ static int ksu_selinux_hide_enable()
 {
     int ret;
     pr_info("selinux_hide: init selinux hide\n");
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
     if (!backup_sepolicy) {
         pr_err("no backup sepolicy available, please save feature and reboot to retry!\n");
         return -EAGAIN;
     }
+#else
+    if (!backup_policydb) {
+        pr_err("no backup policydb available, please save feature and reboot to retry!\n");
+        return -EAGAIN;
+    }
+
+    if (!backup_sidtab) {
+        pr_err("no backup sidtab available, please save feature and reboot to retry!\n");
+        return -EAGAIN;
+    }
+#endif
     selinux_write_op = find_kernel_symbol_exact("write_op");
     if (!selinux_write_op) {
         pr_err("selinux_hide: no write_op found!\n");
@@ -346,7 +360,31 @@ static int ksu_selinux_hide_enable()
     }
 #else
     fake_state.initialized = true;
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
     fake_state.policy = backup_sepolicy;
+#else
+    // Pre-5.10: redirect the state helpers at a private selinux_ss holding
+    // the pristine (backup) policydb/sidtab, mirroring ReSukiSU. On 5.4 the
+    // sidtab is already a pointer, so it is shared, not copied.
+    fake_state.ss = kzalloc(sizeof(*fake_state.ss), GFP_KERNEL);
+    if (!fake_state.ss) {
+        pr_err("selinux_hide: failed alloc selinux_ss!\n");
+        return -ENOMEM;
+    }
+
+    rwlock_init(&fake_state.ss->policy_rwlock);
+
+    // Only one policy load happens on a normal boot, hardcode to 1 to avoid
+    // avd seqno detection.
+    fake_state.ss->latest_granting = 1;
+
+    // Replace policydb/sidtab with ourselves
+    memcpy(&fake_state.ss->policydb, backup_policydb, sizeof(struct policydb));
+    fake_state.ss->sidtab = backup_sidtab;
+    kfree(backup_policydb);
+
+    backup_policydb = NULL;
+#endif
 #endif
 
     context_write = &selinux_write_op[SEL_CONTEXT];
@@ -414,6 +452,14 @@ static void ksu_selinux_hide_unhook()
 static void ksu_selinux_hide_disable()
 {
     pr_info("selinux_hide: exit selinux hide\n");
+#ifndef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+    // Hand the pristine policy back so a later enable() can run again.
+    // The sidtab pointer is shared with fake_state on 5.4 and stays valid.
+    backup_policydb = kzalloc(sizeof(*backup_policydb), GFP_KERNEL);
+    if (backup_policydb) {
+        memcpy(backup_policydb, &fake_state.ss->policydb, sizeof(struct policydb));
+    }
+#endif
     ksu_selinux_hide_unhook();
 }
 
@@ -517,16 +563,17 @@ void __exit ksu_selinux_hide_exit()
     }
     mutex_unlock(&selinux_hide_mutex);
     ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
-    mutex_lock(&selinux_state.status_lock);
+    mutex_lock(ksu_selinux_status_lock());
     if (fake_status)
         __free_page(fake_status);
     fake_status = NULL;
-    mutex_unlock(&selinux_state.status_lock);
+    mutex_unlock(ksu_selinux_status_lock());
 }
 
 void ksu_selinux_hide_drop_backup_if_unused()
 {
     mutex_lock(&selinux_hide_mutex);
+#ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
     if (!ksu_selinux_hide_running && backup_sepolicy) {
         pr_info("selinux_hide is not enabled - drop backup_sepolicy\n");
         sidtab_destroy(backup_sepolicy->sidtab);
@@ -534,6 +581,20 @@ void ksu_selinux_hide_drop_backup_if_unused()
         ksu_destroy_sepolicy(backup_sepolicy);
         backup_sepolicy = NULL;
     }
+#else
+    // Pre-5.10: drop the (policydb, sidtab) pair instead.
+    if (!ksu_selinux_hide_running && backup_policydb) {
+        pr_info("selinux_hide is not enabled - drop backup_policydb\n");
+        ksu_destroy_policydb(backup_policydb);
+        kfree(backup_policydb);
+        backup_policydb = NULL;
+    }
+    if (!ksu_selinux_hide_running && backup_sidtab) {
+        sidtab_destroy(backup_sidtab);
+        kfree(backup_sidtab);
+        backup_sidtab = NULL;
+    }
+#endif
     mutex_unlock(&selinux_hide_mutex);
 }
 
