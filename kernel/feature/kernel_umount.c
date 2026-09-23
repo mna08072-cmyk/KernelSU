@@ -1,6 +1,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/task_work.h>
+#include <linux/workqueue.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/mount.h>
@@ -17,6 +18,13 @@
 #include "policy/feature.h"
 #include "runtime/ksud_boot.h"
 #include "ksu.h"
+
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+// Defined by the in-tree SUSFS patch (fs/susfs.c); declared here locally
+// because include/linux/susfs.h provides no declaration for it.
+extern struct work_struct susfs_extra_works;
+#endif
 
 static bool ksu_kernel_umount_enabled = true;
 
@@ -121,6 +129,15 @@ int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
     up_read(&mount_list_lock);
 
     revert_creds(saved);
+
+#ifdef CONFIG_KSU_SUSFS
+    // Tell SUSFS that this zygote child has been umounted, and schedule the
+    // deferred SUSFS extra work (mount hiding bookkeeping). Mirrors the
+    // upstream SUSFS-enabled KSU behavior.
+    if (!work_pending(&susfs_extra_works))
+        schedule_work(&susfs_extra_works);
+    susfs_set_current_proc_umounted();
+#endif
 
     return 0;
 }

@@ -54,6 +54,38 @@ kernelsu-objs += feature/adb_root.o
 
 kernelsu-objs += feature/selinux_hide.o
 
+ifdef CONFIG_KSU_SUSFS
+kernelsu-objs += feature/susfs_cmd.o
+ccflags-y += -DKSU_SUSFS
+endif
+ifdef CONFIG_KSU_SUSFS_SUS_PATH
+ccflags-y += -DKSU_SUSFS_SUS_PATH
+endif
+ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
+ccflags-y += -DKSU_SUSFS_SUS_MOUNT
+endif
+ifdef CONFIG_KSU_SUSFS_SUS_KSTAT
+ccflags-y += -DKSU_SUSFS_SUS_KSTAT
+endif
+ifdef CONFIG_KSU_SUSFS_SUS_MAP
+ccflags-y += -DKSU_SUSFS_SUS_MAP
+endif
+ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+ccflags-y += -DKSU_SUSFS_OPEN_REDIRECT
+endif
+ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+ccflags-y += -DKSU_SUSFS_SPOOF_UNAME
+endif
+ifdef CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+ccflags-y += -DKSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG
+endif
+ifdef CONFIG_KSU_SUSFS_ENABLE_LOG
+ccflags-y += -DKSU_SUSFS_ENABLE_LOG
+endif
+ifdef CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+ccflags-y += -DKSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+endif
+
 ifdef KBUILD_EXTMOD
 ifeq ($(CONFIG_KSU_DISABLE_MANAGER),y)
 ccflags-y += -DCONFIG_KSU_DISABLE_MANAGER=1

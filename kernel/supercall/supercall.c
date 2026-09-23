@@ -1,4 +1,5 @@
 #include <linux/anon_inodes.h>
+#include <linux/cred.h>
 #include <linux/err.h>
 #include <linux/fdtable.h>
 #include <linux/file.h>
@@ -16,6 +17,11 @@
 #include "arch.h"
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
+
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs.h>
+#include "feature/susfs_cmd.h"
+#endif
 
 #define KSU_DRIVER_PERMISSION_SU_SESSION (1UL << 0)
 
@@ -135,6 +141,20 @@ static int reboot_handler_pre(struct kprobe *p, struct pt_regs *regs)
             pr_warn("install fd add task_work failed\n");
         }
     }
+#ifdef CONFIG_KSU_SUSFS
+    // SUSFS userspace channel: reboot(KSU_INSTALL_MAGIC1, SUSFS_MAGIC, CMD_..., arg).
+    // Served synchronously so the tool can read back results after the syscall.
+    else if (magic1 == KSU_INSTALL_MAGIC1 && magic2 == SUSFS_MAGIC) {
+        unsigned int cmd = (unsigned int)PT_REGS_PARM3(real_regs);
+        void __user **arg = (void __user **)PT_REGS_SYSCALL_PARM4(real_regs);
+
+        // SUSFS commands require root, same rule as the other extensions.
+        if (current_uid().val != 0)
+            return 0;
+
+        ksu_handle_susfs_cmd(cmd, arg);
+    }
+#endif
 
     return 0;
 }

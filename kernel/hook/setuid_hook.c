@@ -21,6 +21,10 @@
 #include "hook/tp_marker.h"
 #include "feature/kernel_umount.h"
 
+#ifdef CONFIG_KSU_SUSFS
+#include <linux/susfs_def.h>
+#endif
+
 int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
 {
     // we rely on the fact that zygote always call setresuid(3) with same uids
@@ -47,6 +51,16 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
         ksu_set_task_tracepoint_flag(current);
     } else {
         ksu_clear_task_tracepoint_flag_if_needed(current);
+#ifdef CONFIG_KSU_SUSFS
+        // Mark user app / isolated processes as no-su so that SUSFS hiding
+        // (sus_path, sus_mount) takes effect on them. Root-allowed processes
+        // keep su and must not be marked. Mirrors the 1.4.2 enable patch
+        // intent without the GKI-only android_kabi_reserved1 markers, using
+        // the TIF_PROC_NO_SU flag from include/linux/susfs_def.h instead.
+        if (is_appuid(new_uid) || is_isolated_process(new_uid)) {
+            susfs_set_current_proc_no_su();
+        }
+#endif
     }
 
     // Handle kernel umount
