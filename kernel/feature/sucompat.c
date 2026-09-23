@@ -106,7 +106,11 @@ long ksu_handle_faccessat_sucompat(int orig_nr, struct pt_regs *regs)
 
     char path[sizeof(su_path) + 1];
     memset(path, 0, sizeof(path));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
     strncpy_from_user_nofault(path, *filename_user, sizeof(path));
+#else
+    strncpy_from_unsafe_user(path, *filename_user, sizeof(path));
+#endif
 
     if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
         old_cred = override_creds(ksu_cred);
@@ -141,7 +145,11 @@ long ksu_handle_stat_sucompat(int orig_nr, struct pt_regs *regs)
 
     char path[sizeof(su_path) + 1];
     memset(path, 0, sizeof(path));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
     strncpy_from_user_nofault(path, *filename_user, sizeof(path));
+#else
+    strncpy_from_unsafe_user(path, *filename_user, sizeof(path));
+#endif
 
     if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
         old_cred = override_creds(ksu_cred);
