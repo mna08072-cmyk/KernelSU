@@ -135,8 +135,15 @@ static bool check_argv(struct user_arg_ptr argv, int index, const char *expected
     if (!p || IS_ERR(p))
         goto fail;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
     if (strncpy_from_user_nofault(buf, p, buf_len) <= 0)
         goto fail;
+#else
+    // strncpy_from_user_nofault() only exists since 5.8; the unsafe variant
+    // is what ReSukiSU uses below 5.8.
+    if (strncpy_from_unsafe_user(buf, p, buf_len) <= 0)
+        goto fail;
+#endif
 
     buf[buf_len - 1] = '\0';
     return !strcmp(buf, expected);
@@ -594,6 +601,7 @@ static long ksu_sys_fstat(const struct pt_regs *regs)
         void __user *st_size_ptr = statbuf + offsetof(struct stat, st_size);
         long size, new_size;
         size_t extra = ksu_rc_len + module_rc_len;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
         if (!copy_from_user_nofault(&size, st_size_ptr, sizeof(long))) {
             new_size = size + extra;
             pr_info("adding rc len: %ld -> %ld (static=%zu module=%zu)", size, new_size, ksu_rc_len, module_rc_len);
@@ -605,6 +613,21 @@ static long ksu_sys_fstat(const struct pt_regs *regs)
         } else {
             pr_err("read statbuf 0x%lx failed", (unsigned long)st_size_ptr);
         }
+#else
+        // copy_*_user_nofault() only exist since 5.8; plain copies are fine
+        // here (sleepable syscall-hook context), same as ReSukiSU.
+        if (!copy_from_user(&size, st_size_ptr, sizeof(long))) {
+            new_size = size + extra;
+            pr_info("adding rc len: %ld -> %ld (static=%zu module=%zu)", size, new_size, ksu_rc_len, module_rc_len);
+            if (!copy_to_user(st_size_ptr, &new_size, sizeof(long))) {
+                pr_info("added rc len");
+            } else {
+                pr_err("add rc len failed: statbuf 0x%lx", (unsigned long)st_size_ptr);
+            }
+        } else {
+            pr_err("read statbuf 0x%lx failed", (unsigned long)st_size_ptr);
+        }
+#endif
     }
 
     return ret;

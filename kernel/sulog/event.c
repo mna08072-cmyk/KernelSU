@@ -126,7 +126,11 @@ static __u32 ksu_sulog_copy_filename(const char __user *filename_user, char *dst
     if (!filename_user)
         return ksu_sulog_copy_empty_string(dst);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
     ret = strncpy_from_user_nofault(dst, (const void __user *)untagged_addr((unsigned long)filename_user), dst_len);
+#else
+    ret = strncpy_from_unsafe_user(dst, (const void __user *)untagged_addr((unsigned long)filename_user), dst_len);
+#endif
     if (ret <= 0)
         return ksu_sulog_copy_empty_string(dst);
 
@@ -166,7 +170,11 @@ static __u32 ksu_sulog_flatten_argv(const char __user *const __user *argv_user, 
             return ksu_sulog_copy_empty_string(dst);
 
         copied =
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
             strncpy_from_user_nofault(arg, (const void __user *)untagged_addr((unsigned long)arg_user), sizeof(arg));
+#else
+            strncpy_from_unsafe_user(arg, (const void __user *)untagged_addr((unsigned long)arg_user), sizeof(arg));
+#endif
         if (copied <= 0)
             return ksu_sulog_copy_empty_string(dst);
 
