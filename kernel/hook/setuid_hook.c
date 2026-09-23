@@ -32,10 +32,16 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
     pr_info("handle_setresuid from %d to %d\n", old_uid, new_uid);
 
     if (unlikely(is_uid_manager(new_uid))) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
         spin_lock_irq(&current->sighand->siglock);
         ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
         ksu_set_task_tracepoint_flag(current);
         spin_unlock_irq(&current->sighand->siglock);
+#else
+        // No seccomp action cache below 5.10; drop the filter instead.
+        disable_seccomp();
+        ksu_set_task_tracepoint_flag(current);
+#endif
 
         pr_info("install fd for manager: %d\n", new_uid);
         ksu_install_fd();
@@ -43,11 +49,15 @@ int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid)
     }
 
     if (ksu_is_allow_uid_for_current(new_uid)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
         if (current->seccomp.mode == SECCOMP_MODE_FILTER && current->seccomp.filter) {
             spin_lock_irq(&current->sighand->siglock);
             ksu_seccomp_allow_cache(current->seccomp.filter, __NR_reboot);
             spin_unlock_irq(&current->sighand->siglock);
         }
+#else
+        disable_seccomp();
+#endif
         ksu_set_task_tracepoint_flag(current);
     } else {
         ksu_clear_task_tracepoint_flag_if_needed(current);

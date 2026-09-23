@@ -64,7 +64,9 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
     put_group_info(group_info);
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 void seccomp_filter_release(struct task_struct *tsk);
+#endif
 
 // https://cs.android.com/android/_/android/kernel/common/+/5346453405bf12d7ed6003f45dd47b71744fe1be
 // Some 15-6.6 kernel have this backport while others don't have, e.g. Pixel 10
@@ -77,8 +79,9 @@ void seccomp_filter_release(struct task_struct *tsk);
 static bool has_call_to_spin_lock = false;
 #endif
 
-static void disable_seccomp(void)
+void disable_seccomp(void)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     struct task_struct *fake;
 
     fake = kmalloc(sizeof(*fake), GFP_KERNEL);
@@ -86,6 +89,7 @@ static void disable_seccomp(void)
         pr_warn("failed to alloc fake task_struct\n");
         return;
     }
+#endif
 
     // Refer to kernel/seccomp.c: seccomp_set_mode_strict
     // When disabling Seccomp, ensure that current->sighand->siglock is held during the operation.
@@ -97,13 +101,22 @@ static void disable_seccomp(void)
     clear_thread_flag(TIF_SECCOMP);
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     memcpy(fake, current, sizeof(*fake));
+#endif
 
     current->seccomp.mode = 0;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
+    // seccomp_filter_release() only exists since 5.9; below that drop the
+    // filter with put_seccomp_filter() while holding sighand, same as
+    // ReSukiSU. (filter_count exists on 5.4 and is reset below as before.)
+    put_seccomp_filter(current);
+#endif
     current->seccomp.filter = NULL;
     atomic_set(&current->seccomp.filter_count, 0);
     spin_unlock_irq(&current->sighand->siglock);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
     // https://github.com/torvalds/linux/commit/bfafe5efa9754ebc991750da0bcca2a6694f3ed3#diff-45eb79a57536d8eccfc1436932f093eb5c0b60d9361c39edb46581ad313e8987R576-R577
     fake->flags |= PF_EXITING;
@@ -120,6 +133,7 @@ static void disable_seccomp(void)
 
     seccomp_filter_release(fake);
     kfree(fake);
+#endif
 }
 
 int escape_with_root_profile(void)

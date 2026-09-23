@@ -11,6 +11,10 @@ int escape_with_root_profile(void);
 
 void escape_to_root_for_init(void);
 
+// Drop the current seccomp filter (used by the escape path and, on
+// pre-5.10 kernels without the seccomp action cache, by the setuid hook).
+void disable_seccomp(void);
+
 void __init ksu_app_profile_init(void);
 
 #endif
