@@ -19,6 +19,7 @@
 
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
+#include "compat/kernel_compat.h"
 #include "runtime/ksud_boot.h"
 #include "selinux/selinux.h"
 #include "policy/allowlist.h"

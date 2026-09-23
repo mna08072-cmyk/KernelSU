@@ -16,6 +16,7 @@
 #include "supercall/internal.h"
 #include "arch.h"
 #include "util.h"
+#include "compat/kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 
 #ifdef CONFIG_KSU_SUSFS
