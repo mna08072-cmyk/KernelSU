@@ -362,28 +362,6 @@ static int ksu_selinux_hide_enable()
     fake_state.initialized = true;
 #ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
     fake_state.policy = backup_sepolicy;
-#else
-    // Pre-5.10: redirect the state helpers at a private selinux_ss holding
-    // the pristine (backup) policydb/sidtab, mirroring ReSukiSU. On 5.4 the
-    // sidtab is already a pointer, so it is shared, not copied.
-    fake_state.ss = kzalloc(sizeof(*fake_state.ss), GFP_KERNEL);
-    if (!fake_state.ss) {
-        pr_err("selinux_hide: failed alloc selinux_ss!\n");
-        return -ENOMEM;
-    }
-
-    rwlock_init(&fake_state.ss->policy_rwlock);
-
-    // Only one policy load happens on a normal boot, hardcode to 1 to avoid
-    // avd seqno detection.
-    fake_state.ss->latest_granting = 1;
-
-    // Replace policydb/sidtab with ourselves
-    memcpy(&fake_state.ss->policydb, backup_policydb, sizeof(struct policydb));
-    fake_state.ss->sidtab = backup_sidtab;
-    kfree(backup_policydb);
-
-    backup_policydb = NULL;
 #endif
 #endif
 
@@ -412,6 +390,31 @@ static int ksu_selinux_hide_enable()
         pr_err("selinux_hide: init: selinux_setprocattr_hook err: %d\n", ret);
         goto unhook;
     }
+
+#ifndef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
+    // Pre-5.10: redirect the state helpers at a private selinux_ss holding
+    // the pristine (backup) policydb/sidtab, mirroring ReSukiSU. Done last so
+    // a patch failure above leaves the backup intact for a later retry. On
+    // 5.4 the sidtab is already a pointer, so it is shared, not copied.
+    fake_state.ss = kzalloc(sizeof(*fake_state.ss), GFP_KERNEL);
+    if (!fake_state.ss) {
+        pr_err("selinux_hide: failed alloc selinux_ss!\n");
+        goto unhook;
+    }
+
+    rwlock_init(&fake_state.ss->policy_rwlock);
+
+    // Only one policy load happens on a normal boot, hardcode to 1 to avoid
+    // avd seqno detection.
+    fake_state.ss->latest_granting = 1;
+
+    // Replace policydb/sidtab with ourselves
+    memcpy(&fake_state.ss->policydb, backup_policydb, sizeof(struct policydb));
+    fake_state.ss->sidtab = backup_sidtab;
+    kfree(backup_policydb);
+
+    backup_policydb = NULL;
+#endif
 
     return 0;
 

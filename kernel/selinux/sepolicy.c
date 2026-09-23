@@ -657,7 +657,7 @@ out:
             pr_err("add_filename_trans: alloc filename_trans_datum failed\n");
             goto out;
         }
-        new_key = (struct filename_trans *)kzalloc(sizeof(*new_key), GFP_KERNEL);
+        new_key = kzalloc(sizeof(*new_key), GFP_KERNEL);
         if (!new_key) {
             pr_err("add_filename_trans: alloc filename_trans_key failed\n");
             goto free_trans;
