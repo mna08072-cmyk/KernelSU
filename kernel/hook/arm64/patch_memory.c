@@ -9,6 +9,7 @@
 #include "klog.h" // IWYU pragma: keep
 #include "linux/cpumask.h"
 #include "linux/gfp.h" // IWYU pragma: keep
+#include "linux/version.h"
 #include "linux/uaccess.h"
 #include "linux/stop_machine.h"
 #include "asm/cacheflush.h"
@@ -147,7 +148,17 @@ static int ksu_patch_text_nosync(void *dst, void *src, size_t len, int flags)
     void *map = set_fixmap_offset(FIX_TEXT_POKE0, phy);
     pr_debug("fixmap addr for patch 0x%lx: 0x%lx\n", p, (unsigned long)map);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+    // bypass some stupid GKI kernel's self protection
     ret = (int)copy_to_kernel_nofault(map, src, len);
+#else
+    memcpy(map, src, len);
+    if (memcmp(map, src, len) == 0) {
+        ret = 0;
+    } else {
+        ret = -EFAULT;
+    }
+#endif
 
     clear_fixmap(FIX_TEXT_POKE0);
 
