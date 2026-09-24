@@ -545,6 +545,7 @@ static const struct hashtab_key_params filenametr_key_params = {
     .cmp = filenametr_cmp,
 };
 #endif
+#endif // #ifdef KSU_COMPAT_HAS_SELINUX_POLICY_STRUCT
 
 static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d,
                                const char *o)
