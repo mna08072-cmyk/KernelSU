@@ -2,6 +2,7 @@
 #include <linux/errno.h>
 #include <linux/kallsyms.h>
 #include <linux/kernel.h>
+#include <linux/version.h>
 #include <linux/lsm_hooks.h>
 #include <linux/mutex.h>
 #include <linux/rcupdate.h>

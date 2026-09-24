@@ -1,5 +1,6 @@
 #include "selinux_hide.h"
 #include "infra/symbol_resolver.h"
+#include <linux/version.h>
 #include "linux/jump_label.h"
 #include "selinux/sepolicy.h"
 #include <linux/cred.h>

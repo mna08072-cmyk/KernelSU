@@ -5,6 +5,7 @@
 #include <linux/kallsyms.h>
 #include <linux/mutex.h>
 #include <linux/nospec.h>
+#include <linux/version.h>
 #include <asm/cacheflush.h>
 #include "infra/symbol_resolver.h"
 #include "../patch_memory.h"
