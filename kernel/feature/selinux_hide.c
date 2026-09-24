@@ -169,6 +169,26 @@ static ssize_t my_write_access(struct file *file, char *buf, size_t size)
     if (sscanf(buf, "%s %s %hu", scon, tcon, &tclass) != 3)
         goto out;
 
+    // Duck Detector dirty-policy oracle asks fsck_untrusted -> fsck_untrusted
+    // : capability sys_admin through /sys/fs/selinux/access (both
+    // android.os.SELinux.checkSELinuxAccess and native selinux_check_access
+    // converge on this node; the node carries only scon/tcon/tclass and
+    // returns the full avd, so any capability-class query on this tuple
+    // would otherwise expose the Samsung stock
+    // `allow fsck_untrusted self:capability sys_admin` rule). Answer exactly
+    // this tuple as denied without consulting live policy; everything else
+    // falls through to the backup-policy answer below untouched.
+    // Capability is the 5th entry of secclass_map in
+    // security/selinux/include/classmap.h
+    // (security=1, process=2, process2=3, system=4, capability=5).
+    if (tclass == 5 && scon[0] == 'u' && tcon[0] == 'u') {
+        if (!strcmp(scon, "u:r:fsck_untrusted:s0") && !strcmp(tcon, "u:r:fsck_untrusted:s0")) {
+            length = scnprintf(buf, SIMPLE_TRANSACTION_LIMIT, "%x %x %x %x %u %x", 0, 0xffffffff, 0,
+                               0xffffffff, 1, 0);
+            goto out;
+        }
+    }
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
     length = security_context_to_sid_with_policy(backup_sepolicy, scon, strlen(scon), &ssid, SECSID_NULL, GFP_KERNEL);
     if (length)
