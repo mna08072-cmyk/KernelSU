@@ -2,6 +2,9 @@
 #define __KSU_H_KERNEL_COMPAT
 
 #include <linux/version.h>
+#include <linux/refcount.h>
+#include <linux/sched.h>
+#include <linux/sched/task.h>
 
 /*
  * KernelSU compat layer for kernels older than the tiann tip baseline.
@@ -51,5 +54,16 @@
 #define ksu_selinux_status_lock() (&selinux_state.ss->status_lock)
 #define ksu_selinux_status_page() (selinux_state.ss->status_page)
 #endif
+
+/*
+ * put_task_struct() only exists on newer kernels; 5.4 has refcount_t usage
+ * with __put_task_struct(). Unique ksu_ name so it can never collide with
+ * upstream, on any version.
+ */
+static inline void ksu_put_task_struct(struct task_struct *tsk)
+{
+	if (refcount_dec_and_test(&tsk->usage))
+		__put_task_struct(tsk);
+}
 
 #endif

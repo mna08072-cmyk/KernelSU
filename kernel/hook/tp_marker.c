@@ -7,6 +7,7 @@
 #include <linux/sched/task.h>
 
 #include "policy/allowlist.h"
+#include "compat/kernel_compat.h"
 #include "klog.h" // IWYU pragma: keep
 #include "selinux/selinux.h"
 
@@ -134,7 +135,7 @@ int ksu_get_task_mark(pid_t pid)
 #else
         marked = test_tsk_thread_flag(task, TIF_SYSCALL_TRACEPOINT) ? 1 : 0;
 #endif
-        put_task_struct(task);
+        ksu_put_task_struct(task);
     } else {
         rcu_read_unlock();
     }
@@ -161,7 +162,7 @@ int ksu_set_task_mark(pid_t pid, bool mark)
             ksu_clear_task_tracepoint_flag(task);
             pr_info("tp_marker: unmarked task pid=%d comm=%s\n", pid, task->comm);
         }
-        put_task_struct(task);
+        ksu_put_task_struct(task);
         ret = 0;
     } else {
         rcu_read_unlock();

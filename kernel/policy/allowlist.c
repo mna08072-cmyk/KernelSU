@@ -476,7 +476,7 @@ void ksu_persistent_allow_list()
     }
 
 put_task:
-    put_task_struct(tsk);
+    ksu_put_task_struct(tsk);
 }
 
 static void migrate_profile(u32 version, struct app_profile *profile)

@@ -19,6 +19,7 @@
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "infra/su_mount_ns.h"
+#include "compat/kernel_compat.h"
 #include "util.h"
 
 extern int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags,
@@ -71,7 +72,7 @@ try_setns:
     // 5.9+ returns int here; 5.4 returns void * (NULL on success), so cast
     // to keep both warning-free. NULL/0 means success either way.
     long ret = (long)ns_get_path(&ns_path, pid1_task, &mntns_operations);
-    put_task_struct(pid1_task);
+    ksu_put_task_struct(pid1_task);
     if (ret) {
         pr_warn("failed get path for init mount namespace: %ld\n", ret);
         goto out;
